@@ -24,7 +24,7 @@ const FileUpload = () => {
     formData.append('excel', excelFile);
 
     try {
-      const response = await axios.post('http://179.191.232.25:7000/compare', formData, {
+      const response = await axios.post('http://179.191.232.25:9000/compare', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
