@@ -11,8 +11,9 @@ CORS(app)
 def padronizar_nome(nome):
     """
     Converte o nome para maiúsculas, remove acentos,
-    mantém apenas letras, espaços e hífens.
+    mantendo apenas letras, espaços e hífens.
     Remove múltiplos espaços.
+    (Para COMPARAÇÃO.)
     """
     if not isinstance(nome, str):
         return ""
@@ -21,29 +22,99 @@ def padronizar_nome(nome):
     nome_limpo = re.sub(r'\s+', ' ', nome_limpo).strip()
     return nome_limpo
 
+def eh_linha_lixo(linha):
+    """
+    Retorna True se a linha contiver palavras-chave que indicam
+    que não faz parte do nome do cliente (ex.: 'javascript:', etc.),
+    ou se for muito curta, só dígitos/hífens, etc.
+    Ajuste conforme a necessidade.
+    """
+    linha_lower = linha.lower()
+    junk_keywords = [
+        "javascript:", "autoatendimento", "template", "hc03.bb?",
+        "tokensessao", "painel de boletos", "banco do brasil", 
+        "beneficiário", "agência", "data do movimento", "totais", 
+        "registrado", "baixado", "liquidado", "tarifas", "despesas cartorarias", 
+        "desc./vendor", "nosso nro."
+    ]
+    if any(kw in linha_lower for kw in junk_keywords):
+        return True
+
+    # Se a linha for muito curta ou só dígitos/hífens, ignoramos
+    if len(linha.strip()) < 2:
+        return True
+    if re.match(r'^[\d-]+$', linha.strip()):
+        return True
+    return False
+
+def remover_numeros_e_caracteres_extras(texto):
+    """
+    Remove:
+      - Qualquer sequência de dígitos
+      - O padrão '* 123456' (ex.: '* 275339')
+      - Datas (dd/mm/aaaa)
+    E limpa espaços.
+    """
+    # Remove '* 123456'
+    texto = re.sub(r'\*\s*\d+', '', texto)
+    # Remove sequências de dígitos
+    texto = re.sub(r'\d+', '', texto)
+    # Remove datas dd/mm/aaaa
+    texto = re.sub(r'\d{2}/\d{2}/\d{4}', '', texto)
+    # Converte múltiplos espaços em 1
+    texto = re.sub(r'\s+', ' ', texto).strip()
+    return texto
+
 def remover_numeros_inicio(linha):
     """
-    Remove qualquer bloco de dígitos e hífens do início da linha.
-    Ex: "22239710000108249-5" ou "333-4" etc.
+    Remove blocos de dígitos e hífens do início da linha.
+    Ex.: "22239710000108249-5" => ""
     """
     return re.sub(r'^[\d-]+\s*', '', linha).strip()
+
+def remover_x_inicial(texto):
+    """
+    Remove qualquer 'X' (ou sequência de 'X') no início do nome.
+    Ex.: "XXXXFRIOS P ARANA LTDA" => "FRIOS P ARANA LTDA"
+    """
+    return re.sub(r'^[Xx]+\s*', '', texto).strip()
+
+def unir_letra_com_seguinte(raw_name):
+    """
+    Une tokens de uma só letra com a palavra seguinte.
+    Ex.: "P ARANA" => "PARANA"
+         "J J L LOPES" => "JJL LOPES"
+    Use com cautela pois pode afetar abreviações.
+    """
+    # Regex que procura um token de 1 letra seguido de espaço + um token maior
+    # Ex.: "P ARANA" => "PARANA"
+    pattern = re.compile(r'\b([A-Z])\s+([A-Z]+)\b')
+    # Substitui repetidamente até não haver mais matches
+    while True:
+        new_name = pattern.sub(r'\1\2', raw_name)
+        if new_name == raw_name:
+            break
+        raw_name = new_name
+    return raw_name
 
 def extrair_dados_pdf(pdf_file):
     """
     1) Lê o PDF inteiro e remove hífens no final de linha.
-    2) Percorre linha a linha, acumulando tudo em 'current_name_parts' até encontrar uma data (dd/mm/aaaa).
-    3) Quando encontra a data, considera que o 'current_name_parts' + o trecho antes da data é o nome completo.
-    4) Remove blocos de números/hífens do início de cada linha que compõe o nome.
+    2) Percorre linha a linha, ignorando as "linhas lixo".
+    3) Acumula em 'current_name_parts' até encontrar a data (dd/mm/aaaa).
+    4) Ao encontrar data, junta essas linhas em um 'raw_name',
+       remove dígitos/hífens iniciais, remove sequências de dígitos e datas,
+       remove 'X' iniciais, e une tokens de 1 letra com a palavra seguinte.
     5) Extrai a operação (2+ letras) após a data.
-    6) Armazena { nome_pad: { "raw_name": <string>, "op": <string> } }
+    6) Monta { nome_pad: { raw_name, op } } para cada registro.
     """
     try:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         texto = ""
         for page in pdf_reader.pages:
-            ptext = page.extract_text()
-            if ptext:
-                texto += ptext + "\n"
+            page_text = page.extract_text()
+            if page_text:
+                texto += page_text + "\n"
 
         # Remove hífen no final de linha
         texto = re.sub(r'-\s*\n\s*', '', texto)
@@ -58,29 +129,31 @@ def extrair_dados_pdf(pdf_file):
             line = line.strip()
             if not line:
                 continue
-            # Ignora linhas que sejam "Nosso nro." ou contenham "javascript:"
-            if line.lower().startswith("nosso nro.") or "javascript:" in line.lower():
+            if eh_linha_lixo(line):
                 continue
 
-            # Se a linha contiver a data, processamos o que estava acumulado como nome
             date_match = re.search(r'\d{2}/\d{2}/\d{4}', line)
             if date_match:
-                # Monta o nome a partir de tudo que estava acumulado
-                # removendo números/hífens iniciais de cada linha
-                raw_name = []
+                # Monta o nome a partir das partes acumuladas
+                raw_name_list = []
                 for part in current_name_parts:
                     clean_part = remover_numeros_inicio(part)
-                    raw_name.append(clean_part)
-                raw_name = " ".join(raw_name).strip()
-
-                # Zera para a próxima
+                    raw_name_list.append(clean_part)
+                raw_name = " ".join(raw_name_list).strip()
                 current_name_parts.clear()
 
-                # Agora pega o prefixo da linha até a data
+                # Pega o prefixo antes da data
                 prefixo = line[:date_match.start()].strip()
                 prefixo = remover_numeros_inicio(prefixo)
                 if prefixo:
                     raw_name = (raw_name + " " + prefixo).strip()
+
+                # Remove números/datas/extras do 'raw_name'
+                raw_name = remover_numeros_e_caracteres_extras(raw_name)
+                # Remove 'X' iniciais
+                raw_name = remover_x_inicial(raw_name)
+                # Une tokens de 1 letra com a próxima palavra
+                raw_name = unir_letra_com_seguinte(raw_name)
 
                 # Captura a operação (2+ letras) após a data
                 sufixo = line[date_match.end():]
@@ -92,10 +165,10 @@ def extrair_dados_pdf(pdf_file):
                     if nome_pad:
                         registros.append((nome_pad, raw_name, op))
             else:
-                # Linha sem data => faz parte do nome
+                # Acumula essa linha como parte do nome
                 current_name_parts.append(line)
 
-        # Converte para dict => {nome_pad: {raw_name, op}}
+        # Monta dicionário final => {nome_pad: {raw_name, op }}
         dados = {}
         for (nome_pad, raw, op) in registros:
             dados[nome_pad] = {
@@ -110,7 +183,7 @@ def extrair_dados_pdf(pdf_file):
 
 def extrair_nomes_excel(excel_file):
     """
-    Extrai nomes do Excel em forma padronizada.
+    Extrai nomes do Excel em forma padronizada (para comparação).
     """
     try:
         df = pd.read_excel(excel_file, dtype=str)
@@ -132,11 +205,11 @@ def compare_files():
     excel_file = request.files['excel']
 
     try:
-        # 1) Extrai dados do PDF => { nome_pad: {raw_name, op} }
+        # 1) Extrai dados do PDF => { nome_pad: { raw_name, op } }
         pdf_dados = extrair_dados_pdf(pdf_file)
         pdf_nomes_pad = set(pdf_dados.keys())
 
-        # 2) Extrai nomes do Excel
+        # 2) Extrai nomes do Excel (padronizados)
         excel_nomes_pad = extrair_nomes_excel(excel_file)
 
         # 3) Prepara estruturas de resultado
@@ -151,15 +224,12 @@ def compare_files():
                 apenas_pdf.discard(nome_pdf)
                 apenas_excel.discard(nome_pdf)
 
-        # 3.2) Correspondência parcial (se houver qualquer token em comum)
-        # Ex.: PDF => "REINALDO DA SILVA AMARAL" => tokens ["REINALDO","DA","SILVA","AMARAL"]
-        #       Excel => "REINALDO AMARAL" => tokens ["REINALDO","AMARAL"]
-        # Se intersecção desses tokens > 0 => consideramos correspondência
+        # 3.2) Correspondência parcial => intersecção de tokens
         for nome_pdf in list(apenas_pdf):
             pdf_tokens = set(nome_pdf.split())
             for nome_xl in list(apenas_excel):
                 xl_tokens = set(nome_xl.split())
-                # Se tiver intersecção
+                # Se houver pelo menos um token em comum, consideramos correspondência
                 if pdf_tokens & xl_tokens:
                     correspondentes[nome_pdf] = pdf_dados[nome_pdf]
                     apenas_pdf.discard(nome_pdf)
@@ -192,4 +262,5 @@ def compare_files():
         return jsonify({"error": "Erro interno no servidor."}), 500
 
 if __name__ == '__main__':
+    # Ajuste host/port conforme necessidade
     app.run(host='0.0.0.0', port=9000, debug=True)
