@@ -52,7 +52,22 @@ const FileUpload = () => {
         {error && <div className="mt-4 text-red-500"><p>{error}</p></div>}
 
         <h2 className="text-xl font-semibold mt-4">Nomes Correspondentes:</h2>
-        <ul>{nomesEmAmbos.map((nome, i) => <li key={i}>{nome}</li>)}</ul>
+        <table className="min-w-full bg-white border border-gray-300">
+          <thead>
+            <tr>
+              <th className="border p-2">Nome</th>
+              <th className="border p-2">Op.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nomesEmAmbos.map((item, i) => (
+              <tr key={i}>
+                <td className="border p-2">{item.nome}</td>
+                <td className="border p-2">{item.op}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
         <h2 className="text-xl font-semibold mt-4">Apenas no Excel:</h2>
         <ul>{nomesApenasExcel.map((nome, i) => <li key={i}>{nome}</li>)}</ul>
