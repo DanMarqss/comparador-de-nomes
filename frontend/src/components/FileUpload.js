@@ -27,7 +27,6 @@ const FileUpload = () => {
       const response = await axios.post('http://179.191.232.25:9000/compare', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-
       setNomesEmAmbos(response.data.nomes_em_ambos);
       setNomesApenasExcel(response.data.nomes_apenas_excel);
       setNomesApenasPdf(response.data.nomes_apenas_pdf);
@@ -45,35 +44,43 @@ const FileUpload = () => {
         <input type="file" accept="application/pdf" onChange={(e) => handleFileChange(e, setPdfFile)} />
         <input type="file" accept=".xlsx, .xls" onChange={(e) => handleFileChange(e, setExcelFile)} />
 
-        <button className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-700" onClick={handleSubmit}>
+        <button
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-700"
+          onClick={handleSubmit}
+        >
           Comparar
         </button>
 
-        {error && <div className="mt-4 text-red-500"><p>{error}</p></div>}
+        {error && (
+          <div className="mt-4 text-red-500">
+            <p>{error}</p>
+          </div>
+        )}
 
         <h2 className="text-xl font-semibold mt-4">Nomes Correspondentes:</h2>
-        <table className="min-w-full bg-white border border-gray-300">
-          <thead>
-            <tr>
-              <th className="border p-2">Nome</th>
-              <th className="border p-2">Op.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {nomesEmAmbos.map((item, i) => (
-              <tr key={i}>
-                <td className="border p-2">{item.nome}</td>
-                <td className="border p-2">{item.op}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ul>
+          {nomesEmAmbos.map((item, i) => (
+            <li key={i}>
+              {item.nome} - {item.op}
+            </li>
+          ))}
+        </ul>
 
         <h2 className="text-xl font-semibold mt-4">Apenas no Excel:</h2>
-        <ul>{nomesApenasExcel.map((nome, i) => <li key={i}>{nome}</li>)}</ul>
+        <ul>
+          {nomesApenasExcel.map((nome, i) => (
+            <li key={i}>{nome}</li>
+          ))}
+        </ul>
 
         <h2 className="text-xl font-semibold mt-4">Apenas no PDF:</h2>
-        <ul>{nomesApenasPdf.map((nome, i) => <li key={i}>{nome}</li>)}</ul>
+        <ul>
+          {nomesApenasPdf.map((item, i) => (
+            <li key={i}>
+              {item.nome} - {item.op}
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
