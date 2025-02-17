@@ -9,71 +9,164 @@ app = Flask(__name__)
 CORS(app)
 
 def padronizar_nome(nome):
-    """Normaliza o nome removendo acentos, espaços extras, caracteres especiais e 'X' indesejados."""
+
     if not isinstance(nome, str):
         return ""
+    nome_limpo = unicodedata.normalize('NFKD', nome.upper()).encode('ASCII','ignore').decode('utf-8')
+    nome_limpo = re.sub(r'[^A-Z\s-]', '', nome_limpo)
+    nome_limpo = re.sub(r'\s+', ' ', nome_limpo).strip()
+    return nome_limpo
 
-    nome = nome.upper().strip()  # Converte para maiúsculas e remove espaços extras
-    nome = unicodedata.normalize('NFKD', nome).encode('ASCII', 'ignore').decode('utf-8')  # Remove acentos
-    nome = re.sub(r'[^A-Z\s]', '', nome)  # Remove qualquer caractere que não seja letra ou espaço
-    nome = re.sub(r'\s+', ' ', nome)  # Substitui múltiplos espaços por um único espaço
+def eh_linha_lixo(linha):
     
-    # 🔹 Remove um "X" inicial caso exista
-    nome = re.sub(r'^X+', '', nome).strip()
+    linha_lower = linha.lower()
+    junk_keywords = [
+        "javascript:", "autoatendimento", "template", "hc03.bb?",
+        "tokensessao", "painel de boletos", "banco do brasil", 
+        "beneficiário", "agência", "data do movimento", "totais", 
+        "registrado", "baixado", "liquidado", "tarifas", "despesas cartorarias", 
+        "desc./vendor", "nosso nro."
+    ]
+    if any(kw in linha_lower for kw in junk_keywords):
+        return True
 
-    return nome
+    # Se a linha for muito curta ou só dígitos/hífens, ignoramos
+    if len(linha.strip()) < 2:
+        return True
+    if re.match(r'^[\d-]+$', linha.strip()):
+        return True
+    return False
 
-def extrair_nomes_pdf(pdf_file):
-    """Extrai nomes do PDF, padronizando e corrigindo quebras de linha."""
+def remover_numeros_e_caracteres_extras(texto):
+   
+    # Remove '* 123456'
+    texto = re.sub(r'\*\s*\d+', '', texto)
+    # Remove sequências de dígitos
+    texto = re.sub(r'\d+', '', texto)
+    # Remove datas dd/mm/aaaa
+    texto = re.sub(r'\d{2}/\d{2}/\d{4}', '', texto)
+    # Converte múltiplos espaços em 1
+    texto = re.sub(r'\s+', ' ', texto).strip()
+    return texto
+
+def remover_numeros_inicio(linha):
+  
+    return re.sub(r'^[\d-]+\s*', '', linha).strip()
+
+def remover_x_inicial(texto):
+    """
+    Remove qualquer 'X' (ou sequência de 'X') no início do nome.
+    Ex.: "XXXXFRIOS P ARANA LTDA" => "FRIOS P ARANA LTDA"
+    """
+    return re.sub(r'^[Xx]+\s*', '', texto).strip()
+
+def unir_letra_com_seguinte(raw_name):
+    """
+    Une tokens de uma só letra com a palavra seguinte.
+    Ex.: "P ARANA" => "PARANA"
+         "J J L LOPES" => "JJL LOPES"
+    Use com cautela pois pode afetar abreviações.
+    """
+    # Regex que procura um token de 1 letra seguido de espaço + um token maior
+    # Ex.: "P ARANA" => "PARANA"
+    pattern = re.compile(r'\b([A-Z])\s+([A-Z]+)\b')
+    # Substitui repetidamente até não haver mais matches
+    while True:
+        new_name = pattern.sub(r'\1\2', raw_name)
+        if new_name == raw_name:
+            break
+        raw_name = new_name
+    return raw_name
+
+def extrair_dados_pdf(pdf_file):
+   
     try:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         texto = ""
         for page in pdf_reader.pages:
-            texto += page.extract_text() + " "
+            page_text = page.extract_text()
+            if page_text:
+                texto += page_text + "\n"
 
-        # 🔹 Substitui quebras de linha por espaços dentro do nome
-        texto = re.sub(r'(?<=\w)-\s', '', texto)  # Remove hífens no final de linha
-        texto = re.sub(r'\s+', ' ', texto)  # Garante que múltiplos espaços sejam apenas um
+        # Remove hífen no final de linha
+        texto = re.sub(r'-\s*\n\s*', '', texto)
+        # Normaliza quebras de linha
+        texto = re.sub(r'\n+', '\n', texto)
 
-        print("\n📄 Texto extraído do PDF (primeiros 500 caracteres):\n", texto[:500])
+        lines = texto.split('\n')
+        registros = []
+        current_name_parts = []
 
-        nomes = re.findall(r'([A-ZÀ-Ú][A-ZÀ-Ú\s]+)', texto)
-        nomes = {padronizar_nome(nome) for nome in nomes if len(nome) > 2}
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if eh_linha_lixo(line):
+                continue
 
-        print(f"🔍 {len(nomes)} nomes extraídos do PDF: {list(nomes)[:10]}...")
-        return nomes
+            date_match = re.search(r'\d{2}/\d{2}/\d{4}', line)
+            if date_match:
+                # Monta o nome a partir das partes acumuladas
+                raw_name_list = []
+                for part in current_name_parts:
+                    clean_part = remover_numeros_inicio(part)
+                    raw_name_list.append(clean_part)
+                raw_name = " ".join(raw_name_list).strip()
+                current_name_parts.clear()
+
+                # Pega o prefixo antes da data
+                prefixo = line[:date_match.start()].strip()
+                prefixo = remover_numeros_inicio(prefixo)
+                if prefixo:
+                    raw_name = (raw_name + " " + prefixo).strip()
+
+                # Remove números/datas/extras do 'raw_name'
+                raw_name = remover_numeros_e_caracteres_extras(raw_name)
+                # Remove 'X' iniciais
+                raw_name = remover_x_inicial(raw_name)
+                # Une tokens de 1 letra com a próxima palavra
+                raw_name = unir_letra_com_seguinte(raw_name)
+
+                # Captura a operação (2+ letras) após a data
+                sufixo = line[date_match.end():]
+                op_match = re.search(r'\b([A-Z]{2,})\b', sufixo)
+                op = op_match.group(1) if op_match else ""
+
+                if raw_name:
+                    nome_pad = padronizar_nome(raw_name)
+                    if nome_pad:
+                        registros.append((nome_pad, raw_name, op))
+            else:
+                # Acumula essa linha como parte do nome
+                current_name_parts.append(line)
+
+        # Monta dicionário final => {nome_pad: {raw_name, op }}
+        dados = {}
+        for (nome_pad, raw, op) in registros:
+            dados[nome_pad] = {
+                "raw_name": raw,
+                "op": op
+            }
+        return dados
+
     except Exception as e:
-        print("🚨 Erro ao extrair nomes do PDF:", e)
-        return set()
+        print("Erro ao extrair dados do PDF:", e)
+        return {}
 
 def extrair_nomes_excel(excel_file):
-    """Extrai e padroniza nomes do Excel."""
+    """
+    Extrai nomes do Excel em forma padronizada (para comparação).
+    """
     try:
         df = pd.read_excel(excel_file, dtype=str)
-        print("\n📊 Colunas do Excel:", df.columns.tolist())
-
-        possiveis_colunas = df.columns.tolist()
         nomes = set()
-
-        for coluna in possiveis_colunas:
-            if coluna in df.columns:
-                nomes.update(df[coluna].dropna().astype(str).apply(lambda x: padronizar_nome(x.strip())))
-
-        print(f"🔍 {len(nomes)} nomes extraídos do Excel: {list(nomes)[:10]}...")
+        for coluna in df.columns:
+            for valor in df[coluna].dropna():
+                nomes.add(padronizar_nome(str(valor)))
         return nomes
     except Exception as e:
-        print("🚨 Erro ao extrair nomes do Excel:", e)
+        print("Erro ao extrair nomes do Excel:", e)
         return set()
-
-def verificar_correspondencia_parcial(nome_pdf, nomes_excel):
-    """Verifica se ao menos o primeiro nome do PDF está presente em algum nome do Excel."""
-    primeiro_nome_pdf = nome_pdf.split()[0]  # Pega apenas o primeiro nome
-
-    for nome_excel in nomes_excel:
-        if primeiro_nome_pdf in nome_excel:  # Verifica se o primeiro nome está contido no Excel
-            return True
-
-    return False
 
 @app.route('/compare', methods=['POST'])
 def compare_files():
@@ -83,40 +176,65 @@ def compare_files():
     pdf_file = request.files['pdf']
     excel_file = request.files['excel']
 
-    print("\n📂 Recebido PDF:", pdf_file.filename)
-    print("📂 Recebido Excel:", excel_file.filename)
-
     try:
-        nomes_pdf = extrair_nomes_pdf(pdf_file)
-        nomes_excel = extrair_nomes_excel(excel_file)
+        # 1) Extrai dados do PDF => { nome_pad: { raw_name, op } }
+        pdf_dados = extrair_dados_pdf(pdf_file)
+        pdf_nomes_pad = set(pdf_dados.keys())
 
-        print(f"\n📄 Nomes extraídos do PDF: {len(nomes_pdf)}")
-        print(f"📊 Nomes extraídos do Excel: {len(nomes_excel)}")
+        # 2) Extrai nomes do Excel (padronizados)
+        excel_nomes_pad = extrair_nomes_excel(excel_file)
 
-        nomes_em_ambos = sorted(nomes_pdf & nomes_excel)
-        nomes_apenas_excel = sorted(nomes_excel - nomes_pdf)
-        nomes_apenas_pdf = sorted(nomes_pdf - nomes_excel)
+        # 3) Prepara estruturas de resultado
+        apenas_pdf = set(pdf_nomes_pad)
+        apenas_excel = set(excel_nomes_pad)
+        correspondentes = {}
 
-        # 🔹 Adiciona correspondência por primeiro nome se ainda não for encontrado
-        for nome in nomes_apenas_pdf.copy():
-            if verificar_correspondencia_parcial(nome, nomes_excel):
-                nomes_em_ambos.append(nome)
-                nomes_apenas_pdf.remove(nome)
+        # 3.1) Correspondência exata
+        for nome_pdf in list(pdf_nomes_pad):
+            if nome_pdf in excel_nomes_pad:
+                correspondentes[nome_pdf] = pdf_dados[nome_pdf]
+                apenas_pdf.discard(nome_pdf)
+                apenas_excel.discard(nome_pdf)
 
-        print(f"✅ Correspondências: {len(nomes_em_ambos)}")
-        print(f"❌ Apenas no Excel: {len(nomes_apenas_excel)}")
-        print(f"❌ Apenas no PDF: {len(nomes_apenas_pdf)}")
+        # 3.2) Correspondência parcial => intersecção de tokens
+        for nome_pdf in list(apenas_pdf):
+            pdf_tokens = set(nome_pdf.split())
+            for nome_xl in list(apenas_excel):
+                xl_tokens = set(nome_xl.split())
+                # Se houver pelo menos um token em comum, irei considerar como correspondente
+                if pdf_tokens & xl_tokens:
+                    correspondentes[nome_pdf] = pdf_dados[nome_pdf]
+                    apenas_pdf.discard(nome_pdf)
+                    apenas_excel.discard(nome_xl)
+                    break
+
+        # 4) Monta JSON de resposta
+        nomes_em_ambos = []
+        for nome_pad in sorted(correspondentes):
+            raw = correspondentes[nome_pad]['raw_name']
+            op = correspondentes[nome_pad]['op']
+            nomes_em_ambos.append({"nome": raw, "op": op})
+
+        apenas_pdf_list = []
+        for nome_pad in sorted(apenas_pdf):
+            raw = pdf_dados[nome_pad]['raw_name']
+            op = pdf_dados[nome_pad]['op']
+            apenas_pdf_list.append({"nome": raw, "op": op})
+
+        apenas_excel_list = sorted(list(apenas_excel))
 
         return jsonify({
-            "nomes_em_ambos": sorted(nomes_em_ambos),
-            "nomes_apenas_excel": sorted(nomes_apenas_excel),
-            "nomes_apenas_pdf": sorted(nomes_apenas_pdf)
+            "nomes_em_ambos": nomes_em_ambos,
+            "nomes_apenas_excel": apenas_excel_list,
+            "nomes_apenas_pdf": apenas_pdf_list
         })
+
     except Exception as e:
-        print("🚨 Erro inesperado:", e)
+        print("Erro inesperado:", e)
         return jsonify({"error": "Erro interno no servidor."}), 500
 
 if __name__ == '__main__':
+    
     app.run(host='0.0.0.0', port=9000, debug=True)
 
 
