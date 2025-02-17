@@ -118,3 +118,6 @@ def compare_files():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=9000, debug=True)
+
+
+## Alterar lógica de espaços e hífens, alguns nomes do PDF está vindo com espaço entre os nomes e outros com hífen.
